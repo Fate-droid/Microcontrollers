@@ -1,0 +1,119 @@
+/*!
+ * @file ISR.c
+ * @brief Este modulo contem as rotinas de servico do aplicativo
+ * @author Fabio e Felipe
+ * @date 27/10/2022
+ */
+
+#include "derivative.h"
+#include "buffer_circular.h"
+#include "ISR.h"
+
+#define TAM_MAX 128
+
+//Ting: Esta variavel so deve ser visivel neste arquivo!!!
+static estado_type estado;
+
+static BufferCirc_type bufferE;				//buffer de entrada
+static BufferCirc_type buffer0;	//buffer de saida Terminal (0) e H5Pin2 (2)
+
+void ISR_extraiString (char *string) {
+	//Entrada de uma nova string
+	uint8_t i=0;
+	BC_pop (&bufferE, &string[i]);
+	while (string[i] != '\0') {
+		BC_pop (&bufferE, &string[++i]);				
+	}
+}
+
+void ISR_inicializaBC () {
+	/*!
+	 * Inicializa um buffer circular de entrada
+	 */
+	BC_init (&bufferE, TAM_MAX);
+	// Inicializa Buffer de saida
+	BC_init(&buffer0, TAM_MAX);
+}
+
+void ISR_EnviaString (char *string) {
+	uint8_t i;
+	
+	//Ting: para evitar concorrencia do uso do Terminal, evita-se a entrada com eco no Terminal
+	//quando esta enviando uma mensagem para Tela ... 
+	if (estado == VALOR_BASE) return;
+
+	while (BC_push( &buffer0, string[0])==-1);
+	UART0_C2 |= UART0_C2_TIE_MASK;
+	i=1;
+	while (string[i] != '\0') {
+		while (BC_push( &buffer0, string[i])==-1);
+		i++;
+	}
+}
+
+uint8_t ISR_BufferSaidaVazio () {
+	return BC_isEmpty (&buffer0);
+}
+
+estado_type ISR_LeEstado () {
+	return estado;
+}
+void ISR_AtualizaEstado(estado_type s){
+	
+	estado = s;
+}
+
+
+///*!
+// * @brief Rotina de serviço de UART0
+// */
+void UART0_IRQHandler()
+{
+	char item;
+
+	if (UART0_S1 & UART0_S1_RDRF_MASK) {
+		/*!
+		 * Interrupcao solicitada pelo canal Rx
+		 */
+		char r;
+
+		r = UART0_D;
+
+		if (estado!= VALOR_BASE) {
+			//Liberar o canal para novas recepcoes
+			return;
+		}
+	
+		//Ecoar o caractere
+		UART0_D = r;
+		//Adicionar no buffer circular de entrada
+		if (r == '\r') {
+			while (!(UART0_S1 & UART_S1_TDRE_MASK));
+			UART0_D = '\n';
+			//inserir o terminador e avisar o fim de uma string
+			BC_push (&bufferE, '\0');
+			estado = TOKENS;
+		} else {
+			BC_push (&bufferE, r);
+		}
+	}
+	else if (UART0_S1 & UART0_S1_TDRE_MASK) {
+		/*!
+		 * Interrupcao solicitada pelo canal Tx
+		 */
+		if (BC_isEmpty(&buffer0)){
+			UART0_C2 &= ~UART0_C2_TIE_MASK;     ///< desabilita Tx quando nao ha dado para envio
+			if (estado == RESULTADO){
+				estado = MENSAGEM;
+			}
+			else if ((estado == MENSAGEM) | (estado == ERRO)){
+				estado = VALOR_BASE;
+			}
+			
+		}
+		else {
+			BC_pop (&buffer0, &item);
+			UART0_D = item;
+		}
+	} 
+}

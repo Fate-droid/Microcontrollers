@@ -1,0 +1,297 @@
+///**
+// * @file main.c
+// * @brief projeto que converte um numero digitado em uma certa base para outras duas bases (binario, decimal, hexadecimal)
+// * @author Felipe e Fabio
+// * @date 27/10/2022
+// *
+// */
+//#include "stdlib.h"
+//#include "string.h"
+//#include "timers.h"
+//#include "UART.h"
+//#include "ISR.h"
+//#include "buffer_circular.h"
+//
+///*!
+// * @brief Variavel de configuracao de UART0
+// */
+
+//
+///*!
+// * @brief Variavel de configuracao de UART0
+// */
+//
+
+#include "stdlib.h"
+#include "string.h"
+#include "timers.h"
+#include "UART.h"
+#include "ISR.h"
+#include "buffer_circular.h"
+#include "util.h"
+
+//Ting: Nao precisa ...
+//#include "derivative.h"
+
+UART0Config_type config0 = {
+		.bdh_sbns=0,		///< Um stop bit
+		.sbr=0b100, 		///< MCGFLLCLK/(baud_rate*osr)=4
+		.c1_loops=0,		///< Operacao normal: full-duplex 
+		.c1_dozeen=0,		///< UART habilitado no modo WAIT
+		.c1_rsrc=0,			///< nao tem efeito para loops == 0
+		.c1_m=0,			///< dados em 8 bits
+		.c1_wake=0,			///< wakeup de RX por linha ociosa (IDLE)
+		.c1_ilt=0,			///< deteccao do estado ocioso pela contagem apos start bits
+		.c1_pe=0,			///< sem checagem de paridade por hardware
+		.c1_pt=0,			///< bit de paridade par (sem efeito se pe==0)
+		.c2_rwu=0,			///< operacao normal de recepcao do UART0
+		.c2_sbk=0,			///< operacao normal de transmissor do UART0
+		.s2_msbf=0,			///< envio de MSB para LSB
+		.s2_rxinv=0,		///< polaridade dos dados de RX nao eh invertida
+		.s2_rwuid=0,		///< nao tem efeito para rwu==0
+		.s2_brk13=0,		///< nao tem efeito para operacao normal de transmissor
+		.s2_lbkde=0,		///< deteccao do caractere break no tamanho menor
+		.c3_r8t9=0,			///< nao tem efeito para m==0
+		.c3_r9t8=0,			///< nao tem efeito para m==0
+		.c3_txdir=0,		///< nao tem efeito para loops==0
+		.c3_txinv=0,		///< polaridade dos dados de TX nao eh invertida 
+		.c4_maen1=0,		///< todos os dados recebidos sao transferidos para buffer de dados
+		.c4_maen2=0,			
+		.c4_m10=0,			///< tamanho dos dados em RX e TX é 8 ou 9 bits
+		.c4_osr=0b01111,	///< superamostragem 16x
+		.c5_tdmae=0,		///< uso de DMA pelo TX desabilitada
+		.c5_rdmae=0,		///< uso de DMA pelo RX desabilitado
+		.c5_bothedge=0,		///< amostragem somente na borda de subida do clock
+		.c5_resyncdis=0		///< resincronizacao na recepcao habilitada
+};
+
+///*!
+// * @brief Converte o valor de entrada para outras duas bases, e coloca nas strings out.
+// * @param[in] ponteiro da base do valor que foi inserido.
+// * @param[in] ponteiro do valor que foi inserido como entrada no terminal.
+// * @param[in] ponteiros string out1 e string out 2 que mostram onde colocar as strings resultantes da conversão.
+// *para as outras duas bases.
+// */
+void atoOp (char *base, uint8_t *valor, char *string_out1, char *string_out2){
+	if (*base == 'b'){
+		Valor2Dec (*valor,string_out1) ;
+		Valor2Hex (*valor,string_out2 );
+	}
+	if (*base == 'd'){
+		Valor2Bin (*valor,string_out1 );
+		Valor2Hex (*valor,string_out2 );
+		}
+	if (*base == 'x'){
+		Valor2Bin (*valor,string_out1 );
+		Valor2Dec (*valor,string_out2) ;
+		}
+	
+}
+
+///*!
+// * @brief Extrai da string _in a base e o valor a ser convertido.
+// * @param[in] string_in da qual será extraída sua base e valor a ser convertido.
+// * @param[in] base ponteiro que mostra onde será colocada a base extraída.
+// * @param[in] valor ponteiro que mostra onde será colocado o valor extraído.
+// */
+
+int atoValor (char *string_in, char *base, uint8_t *valor_final){
+	char *sub_str[2];
+	char *str_valor;
+	char delimitador[] =" ";
+	uint8_t i =0;
+	sub_str[i] = strtok (string_in, delimitador);
+	while (sub_str[i] != '\0' && i <2){
+		i++;
+		sub_str[i] = strtok(NULL, delimitador);
+	}
+	if (i!= 2){ 
+		return -1;
+	}
+	*base = *sub_str[0];
+	uint8_t digitos = strlen(sub_str[1]);
+	str_valor = sub_str[1];
+
+	//Ting: Prestem atencao aqui ... Como o usuario pode digitar valores maiores que 255, 
+	// temos que prever um espaco maior ...
+	//*valor = 0;
+	uint16_t valor = 0;
+
+	uint8_t pot =1;
+	if ( *base =='b'){
+		if (digitos >8){
+			return -3;
+		}
+		for (i=0; i<digitos; i++){
+			uint8_t aux = digitos-i-1;
+			if (str_valor[aux]!= '0' && str_valor[aux] != '1'){
+				return -2;
+			}
+			//*valor += (str_valor[aux]-0x30)*pot;
+			valor += (str_valor[aux]-0x30)*pot;
+			pot*=2; 
+		}
+	} 
+	else if (*base =='d'){
+		if (digitos > 3){
+			return -3;
+		}
+		for (i=0; i<digitos; i++){
+			uint8_t aux = digitos-i-1;
+
+			//Ting: faltou validar os digitos !!!
+			if(str_valor[aux] < 0x30 || str_valor[aux] > 0x39) return -2;
+
+			//*valor += (str_valor[aux]-0x30)*pot;
+			valor += (str_valor[aux]-0x30)*pot;
+			pot*=10; 
+		}
+
+		//if (*valor > 255){
+		if (valor > 255){
+			return -4;
+		}
+	}
+	else if (*base =='x'){
+		if (digitos>2){
+			return -3;
+		}
+		for (i=0; i<digitos; i++){
+			uint8_t aux = digitos-i-1;
+
+			if (!((str_valor[aux] > 0x29 && str_valor[aux] < 0x3A) ||
+					(str_valor[aux] > 0x40 && str_valor[aux] < 0x47) ||
+					(str_valor[aux] > 0x60 && str_valor[aux] < 0x67))) return -2;
+
+			if (str_valor[aux]<0x3a){
+				//*valor += (str_valor[aux]-0x30)*pot;
+				valor += (str_valor[aux]-0x30)*pot;
+			}
+			//Ting: maiuscula
+			//else if (str_valor[aux]>0x39){
+			else if (str_valor[aux]<0x47){
+				//*valor += (str_valor[aux]-0x37)*pot;
+				valor += (str_valor[aux]-0x37)*pot;
+				//Ting: faltou considerar minusculas ...
+			} else if (str_valor[aux]<0x67) {
+				valor += (str_valor[aux]-0x57)*pot;
+			}
+
+			pot*=16; 
+
+			//Ting: aqui vale tambem o teste 	
+			if (valor > 255){
+				return -4;
+			}
+		}
+	}
+
+	//Ting: so passando os testes eh que se aceita o valor ...
+	*valor_final = valor;
+
+	return 0;
+}
+
+#define BAUD_RATE 38400
+
+ ///*!
+ // * @brief Função main onde o fluxo principal do programa toma lugar.
+ // */
+ int main (void){
+	 //	/*!
+	 //	 * Seta o divisor de frequencia do barramento
+	 //	 */
+	 SIM_setaOUTDIV4 (0b000);
+	 //	
+	 //	/*!
+	 //	 * Configurar UART0 com Rx e Tx habilitados: SBR tem que ser aproximado para maior que baud rate setado
+	 //	 	 
+	 config0.sbr = (uint16_t)(20971520./(BAUD_RATE * (config0.c4_osr+1)));
+	 if ((20971520./(1.0 * BAUD_RATE * (config0.c4_osr+1))) > config0.sbr)
+		 config0.sbr++;
+	 UART0_initTerminal (&config0);
+	 //
+	 //
+	 //	/*!
+	 //	 * Ativa IRQs
+	 //	 */
+	 UART0_ativaIRQTerminal (0);
+	 //	// Setup
+	 ISR_inicializaBC();
+	 //	
+	 //	/*!
+	 //	 * Habilita a interrupcao do Rx do UART0
+	 //	 */
+	 UART0_ativaInterruptRxTerminal();
+	 //	
+	 //	/*!
+	 //	 * Reseta o estado do aplicativo
+	 //	 */
+	 ISR_AtualizaEstado (MENSAGEM);
+	 //	string[0] = '\0';
+	 //	
+	 ISR_inicializaBC ();
+	 estado_type estado_corrente;
+	 int x;
+	 char base;
+	 uint8_t valor;
+	 char string_out1[20];
+	 char string_out2[20];
+	 char string_resultado[45]= " ";
+	 char string_recebida[50];
+	 char string_erro[] = "\r\n Expressao incorreta. Entre <base> <valor> \r\n";
+	 char instrucao []= "\r\n Entre <base> <valor> (<base>: b,d,x)\r\n";
+	 estado_corrente = MENSAGEM;	 
+	 for(;;){
+		 estado_corrente = ISR_LeEstado ();
+		 switch (estado_corrente){
+		 case MENSAGEM:
+			 ISR_EnviaString (instrucao);
+			 ISR_AtualizaEstado(VALOR_BASE);
+			 break;
+		 case VALOR_BASE:
+			 
+			 break;
+
+		 case TOKENS:
+			 ISR_extraiString (string_recebida);
+			x =  atoValor (string_recebida, &base, &valor);
+			//Ting: Cono sao retornados erros discriminados ...
+			//vcs podem gerar mensagens de erro mais detalhados. Certo?
+			 if  ((x== -1) | (x== -2) | (x== -3) | (x== -4)) {
+				 ISR_AtualizaEstado(ERRO);
+				 ISR_EnviaString (string_erro);
+				 break;
+			 }
+			 else{
+				 ISR_AtualizaEstado(CONVERSAO);
+				 break;
+			 }
+			 // extrai operandos e operador da string e identifica a base e o valor (usar a funcao)
+		 case CONVERSAO:
+			 // converte o valor para as outras bases (usar funcao)
+			 atoOp (&base, &valor, string_out1, string_out2);
+			 //monta string do resultado e envia para o terminal
+			strcpy (string_resultado, " ");
+			 
+			 strcat (string_resultado, string_out1);
+			 strcat (string_resultado, "  ");
+			 strcat (string_resultado, string_out2);
+			 strcat (string_resultado, "\r\n");
+			 ISR_AtualizaEstado(RESULTADO);
+			 ISR_EnviaString (string_resultado);
+
+			 break;
+		 case ERRO:
+
+			 break;
+		 case RESULTADO:
+
+			 break;
+
+
+		 }
+	 }
+	 return 0;
+ }
+
